@@ -58,6 +58,21 @@ class _AddEditCustomerViewState extends ConsumerState<AddEditCustomerView> {
     super.dispose();
   }
 
+  String _formatAddress(Address addr) {
+    if (addr.formatted != null && addr.formatted!.trim().isNotEmpty) {
+      return addr.formatted!.trim();
+    }
+    final parts = [
+      addr.street,
+      addr.neighborhood,
+      addr.city,
+      addr.state,
+      addr.postalCode,
+      addr.country,
+    ].where((p) => p != null && p.trim().isNotEmpty).map((p) => p!.trim()).toList();
+    return parts.join(', ');
+  }
+
   Future<void> _importContact() async {
     try {
       final status = await FlutterContacts.permissions.request(PermissionType.read);
@@ -68,22 +83,93 @@ class _AddEditCustomerViewState extends ConsumerState<AddEditCustomerView> {
         return;
       }
 
-      final contact = await FlutterContacts.native.showPicker();
+      // Explicitly request all contact properties so phone, email, and address are retrieved
+      Contact? contact = await FlutterContacts.native.showPicker(
+        properties: ContactProperties.allProperties,
+      );
+
       if (contact != null) {
+        // Fallback: If native picker only returned basic contact details, fetch full contact by ID
+        if (contact.phones.isEmpty &&
+            contact.emails.isEmpty &&
+            contact.addresses.isEmpty &&
+            contact.id != null &&
+            contact.id!.isNotEmpty) {
+          try {
+            final fullContact = await FlutterContacts.get(
+              contact.id!,
+              properties: ContactProperties.allProperties,
+            );
+            if (fullContact != null) {
+              contact = fullContact;
+            }
+          } catch (e) {
+            debugPrint('Error getting full contact by ID: $e');
+          }
+        }
+
+        final Contact selected = contact!;
+
+        // 1. Name
+        String name = (selected.displayName ?? '').trim();
+        if (name.isEmpty && selected.name != null) {
+          name = '${selected.name!.first} ${selected.name!.last}'.trim();
+        }
+
+        // 2. Phone
+        String? phone;
+        if (selected.phones.isNotEmpty) {
+          final primaryPhone = selected.phones.firstWhere(
+            (p) => p.isPrimary == true,
+            orElse: () => selected.phones.firstWhere(
+              (p) => p.label.label == PhoneLabel.mobile,
+              orElse: () => selected.phones.first,
+            ),
+          );
+          final rawNumber = primaryPhone.normalizedNumber ?? primaryPhone.number;
+          phone = rawNumber.replaceAll(RegExp(r'\s+'), '');
+        }
+
+        // 3. Email
+        String? email;
+        if (selected.emails.isNotEmpty) {
+          final primaryEmail = selected.emails.firstWhere(
+            (e) => e.isPrimary == true,
+            orElse: () => selected.emails.first,
+          );
+          email = primaryEmail.address.trim();
+        }
+
+        // 4. Address
+        String? address;
+        if (selected.addresses.isNotEmpty) {
+          final formatted = _formatAddress(selected.addresses.first);
+          if (formatted.isNotEmpty) {
+            address = formatted;
+          }
+        }
+
         setState(() {
-          _nameController.text = contact.displayName ?? '';
-          if (contact.phones.isNotEmpty) {
-            _phoneController.text = contact.phones.first.number.replaceAll(RegExp(r'\s+'), '');
+          if (name.isNotEmpty) {
+            _nameController.text = name;
           }
-          if (contact.emails.isNotEmpty) {
-            _emailController.text = contact.emails.first.address;
+          if (phone != null && phone.isNotEmpty) {
+            _phoneController.text = phone;
           }
-          if (contact.addresses.isNotEmpty) {
-            _addressController.text = contact.addresses.first.formatted ?? contact.addresses.first.street ?? '';
+          if (email != null && email.isNotEmpty) {
+            _emailController.text = email;
+          }
+          if (address != null && address.isNotEmpty) {
+            _addressController.text = address;
           }
         });
+
+        if (mounted) {
+          AppDialogs.showToast(context, 'Contact imported successfully');
+        }
       }
-    } catch (_) {
+    } catch (e, stack) {
+      debugPrint('Error importing contact: $e\n$stack');
       if (mounted) {
         AppDialogs.showToast(context, 'Unable to import contact');
       }

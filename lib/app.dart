@@ -118,28 +118,50 @@ class _HishabifyAppState extends ConsumerState<HishabifyApp> with WidgetsBinding
       debugShowCheckedModeBanner: false,
       home: _buildHome(settingsState, profileState),
       builder: (context, child) {
-        if (isLocked) {
-          return PopScope(
-            canPop: false,
-            child: AppLockView(onUnlockPressed: _authenticate),
-          );
-        }
-        return child ?? const SizedBox.shrink();
+        if (child == null) return const SizedBox.shrink();
+        return Stack(
+          children: [
+            IgnorePointer(
+              ignoring: isLocked,
+              child: ExcludeSemantics(
+                excluding: isLocked,
+                child: child,
+              ),
+            ),
+            if (isLocked)
+              Positioned.fill(
+                child: PopScope(
+                  canPop: false,
+                  child: AppLockView(onUnlockPressed: _authenticate),
+                ),
+              ),
+          ],
+        );
       },
     );
   }
 
   Widget _buildHome(SettingsState settingsState, ProfileState profileState) {
     if (settingsState.isLoading || profileState.isLoading) {
-      return const Scaffold(
+      return Scaffold(
         backgroundColor: Colors.white,
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              CircularProgressIndicator(color: AppColors.primary),
-              SizedBox(height: 16),
-              Text(
+              ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: Image.asset(
+                  'assets/images/app_logo.png',
+                  width: 80,
+                  height: 80,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              const SizedBox(height: 24),
+              const CircularProgressIndicator(color: AppColors.primary, strokeWidth: 3),
+              const SizedBox(height: 16),
+              const Text(
                 'Hishabify',
                 style: TextStyle(
                   fontSize: 22,
