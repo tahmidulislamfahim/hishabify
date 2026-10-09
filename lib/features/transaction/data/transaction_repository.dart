@@ -1,4 +1,3 @@
-import 'package:sqflite/sqflite.dart';
 import '../../../core/database/app_database.dart';
 import '../../filter/domain/filter_model.dart';
 import '../domain/transaction_model.dart';
@@ -142,11 +141,24 @@ class TransactionRepository {
   Future<void> saveTransaction(TransactionItem tx) async {
     final db = await _db.database;
     await db.transaction((txn) async {
-      await txn.insert(
+      final existing = await txn.query(
         'transactions',
-        tx.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [tx.id],
+        limit: 1,
       );
+
+      if (existing.isNotEmpty) {
+        await txn.update(
+          'transactions',
+          tx.toMap(),
+          where: 'id = ?',
+          whereArgs: [tx.id],
+        );
+      } else {
+        await txn.insert('transactions', tx.toMap());
+      }
 
       // Update customer updated_at
       await txn.update(

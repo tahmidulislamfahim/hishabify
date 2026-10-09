@@ -199,16 +199,18 @@ class SettingsView extends ConsumerWidget {
     );
 
     if (confirm == true) {
-      final success = await BackupRestoreService.restoreLocalBackup();
-      if (success && context.mounted) {
+      final status = await BackupRestoreService.restoreLocalBackup();
+      if (status == RestoreStatus.success && context.mounted) {
         await ref.read(profileViewModelProvider.notifier).loadProfiles();
         await ref.read(customerListViewModelProvider.notifier).loadCustomers();
         await ref.read(settingsViewModelProvider.notifier).loadSettings();
         if (context.mounted) {
           AppDialogs.showToast(context, 'Data restored successfully!');
         }
-      } else if (context.mounted) {
-        AppDialogs.showToast(context, 'Restore cancelled or invalid backup file');
+      } else if (status == RestoreStatus.invalidFile && context.mounted) {
+        AppDialogs.showToast(context, 'Invalid backup file or corrupt data');
+      } else if (status == RestoreStatus.error && context.mounted) {
+        AppDialogs.showToast(context, 'Failed to import backup data');
       }
     }
   }

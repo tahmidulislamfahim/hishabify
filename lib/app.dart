@@ -19,13 +19,13 @@ class HishabifyApp extends ConsumerStatefulWidget {
 
 class _HishabifyAppState extends ConsumerState<HishabifyApp> with WidgetsBindingObserver {
   bool _isUnlocked = false;
-  bool _isLockChecked = false;
+  bool _isAuthenticating = false;
+  bool _hasInitialAuthTriggered = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _checkAppLock();
   }
 
   @override
@@ -36,48 +36,57 @@ class _HishabifyAppState extends ConsumerState<HishabifyApp> with WidgetsBinding
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      final settings = ref.read(settingsViewModelProvider).settings;
-      if (settings.appLockEnabled && !_isUnlocked) {
-        _checkAppLock();
+    if (_isAuthenticating) return;
+
+    final settings = ref.read(settingsViewModelProvider).settings;
+    if (!settings.appLockEnabled) return;
+
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      if (mounted) {
+        setState(() {
+          _isUnlocked = false;
+        });
       }
-    } else if (state == AppLifecycleState.paused) {
-      final settings = ref.read(settingsViewModelProvider).settings;
-      if (settings.appLockEnabled) {
-        setState(() => _isUnlocked = false);
+    } else if (state == AppLifecycleState.resumed) {
+      if (!_isUnlocked) {
+        _authenticate();
       }
     }
   }
 
-  Future<void> _checkAppLock() async {
-    final settings = ref.read(settingsViewModelProvider).settings;
-    if (settings.appLockEnabled) {
+  Future<void> _authenticate() async {
+    if (_isAuthenticating) return;
+    _isAuthenticating = true;
+
+    try {
+      final settings = ref.read(settingsViewModelProvider).settings;
+      if (!settings.appLockEnabled) {
+        if (mounted) {
+          setState(() {
+            _isUnlocked = true;
+          });
+        }
+        return;
+      }
+
       final result = await AppLockService.authenticateDetailed(
         reason: 'Please authenticate to access Hishabify',
       );
+
       if (result.isNoCredentials) {
         await ref.read(settingsViewModelProvider.notifier).setAppLock(false);
         if (mounted) {
           setState(() {
             _isUnlocked = true;
-            _isLockChecked = true;
           });
         }
-        return;
-      }
-      if (mounted) {
+      } else if (mounted) {
         setState(() {
           _isUnlocked = result.isSuccess;
-          _isLockChecked = true;
         });
       }
-    } else {
-      if (mounted) {
-        setState(() {
-          _isUnlocked = true;
-          _isLockChecked = true;
-        });
-      }
+    } finally {
+      _isAuthenticating = false;
     }
   }
 
@@ -86,16 +95,42 @@ class _HishabifyAppState extends ConsumerState<HishabifyApp> with WidgetsBinding
     final settingsState = ref.watch(settingsViewModelProvider);
     final profileState = ref.watch(profileViewModelProvider);
 
+    // If settings finished loading and app lock is NOT enabled, keep unlocked
+    if (!settingsState.isLoading && !settingsState.settings.appLockEnabled && !_isUnlocked) {
+      _isUnlocked = true;
+    }
+
+    // On cold start, if settings finished loading and app lock IS enabled, auto-trigger authentication once
+    if (!settingsState.isLoading && settingsState.settings.appLockEnabled && !_hasInitialAuthTriggered) {
+      _hasInitialAuthTriggered = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_isUnlocked) {
+          _authenticate();
+        }
+      });
+    }
+
+    final isLocked = !settingsState.isLoading && settingsState.settings.appLockEnabled && !_isUnlocked;
+
     return MaterialApp(
       title: 'Hishabify',
       theme: AppTheme.theme,
       debugShowCheckedModeBanner: false,
       home: _buildHome(settingsState, profileState),
+      builder: (context, child) {
+        if (isLocked) {
+          return PopScope(
+            canPop: false,
+            child: AppLockView(onUnlockPressed: _authenticate),
+          );
+        }
+        return child ?? const SizedBox.shrink();
+      },
     );
   }
 
   Widget _buildHome(SettingsState settingsState, ProfileState profileState) {
-    if (settingsState.isLoading || profileState.isLoading || !_isLockChecked) {
+    if (settingsState.isLoading || profileState.isLoading) {
       return const Scaffold(
         backgroundColor: Colors.white,
         body: Center(
@@ -116,10 +151,6 @@ class _HishabifyAppState extends ConsumerState<HishabifyApp> with WidgetsBinding
           ),
         ),
       );
-    }
-
-    if (settingsState.settings.appLockEnabled && !_isUnlocked) {
-      return AppLockView(onUnlockPressed: _checkAppLock);
     }
 
     if (!settingsState.settings.disclosedTerms) {

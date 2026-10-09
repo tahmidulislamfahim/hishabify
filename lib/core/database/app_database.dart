@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -20,6 +21,9 @@ class AppDatabase {
     return await openDatabase(
       path,
       version: 1,
+      onConfigure: (db) async {
+        await db.execute('PRAGMA foreign_keys = ON');
+      },
       onCreate: _createDB,
     );
   }
@@ -185,9 +189,32 @@ class AppDatabase {
             conflictAlgorithm: ConflictAlgorithm.replace,
           );
         }
+
+        // Ensure terms are marked as disclosed in the key-value settings table
+        await txn.insert(
+          'settings',
+          {'key': 'disclosed_terms', 'value': 'true'},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+
+        final defaultProfilesCount = Sqflite.firstIntValue(
+          await txn.rawQuery('SELECT COUNT(*) FROM profiles WHERE is_default = 1'),
+        ) ?? 0;
+        if (defaultProfilesCount == 0 && profiles.isNotEmpty) {
+          final firstProfileId = (profiles.first as Map)['id'];
+          if (firstProfileId != null) {
+            await txn.update(
+              'profiles',
+              {'is_default': 1},
+              where: 'id = ?',
+              whereArgs: [firstProfileId],
+            );
+          }
+        }
       });
       return true;
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('Restore error in AppDatabase: $e\n$stack');
       return false;
     }
   }

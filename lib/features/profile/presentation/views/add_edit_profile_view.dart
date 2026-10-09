@@ -5,6 +5,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/dialogs.dart';
 import '../../../customer/presentation/viewmodels/customer_list_viewmodel.dart';
 import '../../../customer/presentation/views/customer_list_view.dart';
+import '../../../settings/data/backup_restore_service.dart';
 import '../../../settings/domain/settings_model.dart';
 import '../../../settings/presentation/viewmodels/settings_viewmodel.dart';
 import '../../domain/profile_model.dart';
@@ -28,6 +29,7 @@ class _AddEditProfileViewState extends ConsumerState<AddEditProfileView> {
   final _nameController = TextEditingController();
   ProfileType _selectedType = ProfileType.business;
   String _selectedCurrency = '\$';
+  bool _isRestoring = false;
 
   @override
   void initState() {
@@ -48,12 +50,68 @@ class _AddEditProfileViewState extends ConsumerState<AddEditProfileView> {
     super.dispose();
   }
 
+  Future<void> _handleRestore() async {
+    if (_isRestoring) return;
+
+    final confirm = await AppDialogs.showConfirmDialog(
+      context: context,
+      title: 'Restore Backup',
+      message:
+          'Restoring a backup will import your saved stores, customers, and transactions. Proceed to select backup file?',
+      confirmText: 'SELECT BACKUP FILE',
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isRestoring = true);
+
+    try {
+      final status = await BackupRestoreService.restoreLocalBackup();
+      if (!mounted) return;
+
+      if (status == RestoreStatus.success) {
+        await ref.read(settingsViewModelProvider.notifier).loadSettings();
+        await ref.read(settingsViewModelProvider.notifier).setDisclosedTerms(true);
+        await ref.read(profileViewModelProvider.notifier).loadProfiles();
+        await ref.read(customerListViewModelProvider.notifier).loadCustomers();
+        if (!mounted) return;
+
+        final restoredProfiles = ref.read(profileViewModelProvider).profiles;
+        if (restoredProfiles.isNotEmpty) {
+          AppDialogs.showToast(context, 'Data restored successfully!');
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const CustomerListView()),
+            (route) => false,
+          );
+          return;
+        } else {
+          AppDialogs.showToast(context, 'Backup restored, but no profiles found.');
+        }
+      } else if (status == RestoreStatus.invalidFile) {
+        AppDialogs.showToast(context, 'Invalid backup file or corrupt data');
+      } else if (status == RestoreStatus.error) {
+        AppDialogs.showToast(context, 'Failed to import backup data');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      AppDialogs.showToast(context, 'Error restoring backup: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isRestoring = false);
+      }
+    }
+  }
+
   Future<void> _handleSave() async {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
       AppDialogs.showToast(context, 'Please enter Profile Name');
       return;
     }
+
+    final profileNotifier = ref.read(profileViewModelProvider.notifier);
+    final settingsNotifier = ref.read(settingsViewModelProvider.notifier);
+    final customerNotifier = ref.read(customerListViewModelProvider.notifier);
 
     final profile = Profile(
       id: widget.existingProfile?.id ?? const Uuid().v4(),
@@ -64,11 +122,11 @@ class _AddEditProfileViewState extends ConsumerState<AddEditProfileView> {
       createdAt: widget.existingProfile?.createdAt ?? DateTime.now(),
     );
 
-    await ref.read(profileViewModelProvider.notifier).saveProfile(profile);
     if (profile.isDefault || widget.existingProfile == null) {
-      await ref.read(settingsViewModelProvider.notifier).setDefaultCurrency(_selectedCurrency);
+      await settingsNotifier.setDefaultCurrency(_selectedCurrency);
     }
-    await ref.read(customerListViewModelProvider.notifier).loadCustomers();
+    await profileNotifier.saveProfile(profile);
+    await customerNotifier.loadCustomers();
 
     if (!mounted) return;
 
@@ -81,16 +139,88 @@ class _AddEditProfileViewState extends ConsumerState<AddEditProfileView> {
     }
   }
 
+  Future<void> _handleDelete() async {
+    final profile = widget.existingProfile;
+    if (profile == null) return;
+
+    final profileNotifier = ref.read(profileViewModelProvider.notifier);
+    final customerNotifier = ref.read(customerListViewModelProvider.notifier);
+    final profileState = ref.read(profileViewModelProvider);
+    final totalCount = profileState.profiles.length;
+    final isActive = profileState.activeProfile?.id == profile.id;
+    final entityType = profile.type == ProfileType.business ? 'store' : 'profile';
+    final capitalizedType = profile.type == ProfileType.business ? 'Store' : 'Profile';
+
+    if (totalCount <= 1) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Cannot Delete $capitalizedType'),
+          content: Text(
+            'At least one $entityType is required. To delete this $entityType, please create another $entityType first.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await AppDialogs.showConfirmDialog(
+      context: context,
+      title: 'Delete $capitalizedType',
+      message: isActive
+          ? 'Are you sure you want to delete "${profile.name}"?\n\nThis is currently your active $entityType. All transactions and customers in this $entityType will be permanently deleted.'
+          : 'Are you sure you want to delete "${profile.name}"?\n\nAll transactions and customers associated with this $entityType will be permanently deleted.',
+      confirmText: 'DELETE',
+      isDestructive: true,
+    );
+
+    if (confirmed == true && mounted) {
+      await profileNotifier.deleteProfile(profile.id);
+      await customerNotifier.loadCustomers();
+      if (mounted) {
+        AppDialogs.showToast(
+          context,
+          '$capitalizedType "${profile.name}" deleted successfully',
+        );
+        Navigator.of(context).pop();
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final profileState = ref.watch(profileViewModelProvider);
+    final hasNoData = widget.existingProfile == null &&
+        (widget.isFirstTime || profileState.profiles.isEmpty);
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: Text(widget.existingProfile == null ? 'Profile Details' : 'Edit Profile'),
+        title: Text(widget.existingProfile == null
+            ? 'Profile Details'
+            : (widget.existingProfile!.type == ProfileType.business ? 'Edit Store' : 'Edit Profile')),
         actions: [
+          if (widget.existingProfile != null)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, size: 24),
+              onPressed: _isRestoring ? null : _handleDelete,
+              tooltip: widget.existingProfile!.type == ProfileType.business ? 'Delete Store' : 'Delete Profile',
+            ),
+          if (hasNoData)
+            IconButton(
+              icon: const Icon(Icons.cloud_download_outlined, size: 24),
+              onPressed: _isRestoring ? null : _handleRestore,
+              tooltip: 'Restore Backup',
+            ),
           IconButton(
             icon: const Icon(Icons.check, size: 28),
-            onPressed: _handleSave,
+            onPressed: _isRestoring ? null : _handleSave,
             tooltip: 'Save',
           ),
         ],
@@ -193,10 +323,138 @@ class _AddEditProfileViewState extends ConsumerState<AddEditProfileView> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _handleSave,
+                onPressed: _isRestoring ? null : _handleSave,
                 child: const Text('Save Profile'),
               ),
             ),
+            if (hasNoData) ...[
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  const Expanded(child: Divider(color: AppColors.border, thickness: 1)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'OR',
+                      style: TextStyle(
+                        color: AppColors.textMuted,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ),
+                  const Expanded(child: Divider(color: AppColors.border, thickness: 1)),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primary.withValues(alpha: 0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _isRestoring ? null : _handleRestore,
+                    borderRadius: BorderRadius.circular(14),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryLight,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: _isRestoring
+                                ? const SizedBox(
+                                    width: 26,
+                                    height: 26,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.5,
+                                      color: AppColors.primary,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.cloud_download_rounded,
+                                    color: AppColors.primary,
+                                    size: 26,
+                                  ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _isRestoring ? 'Restoring Data...' : 'Restore from Backup',
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  _isRestoring
+                                      ? 'Please wait while importing records...'
+                                      : 'Already have a backup? Import your data here',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.arrow_forward_ios_rounded,
+                            size: 16,
+                            color: AppColors.primary,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            if (widget.existingProfile != null) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _handleDelete,
+                  icon: const Icon(Icons.delete_outline, color: AppColors.creditRed),
+                  label: Text(
+                    widget.existingProfile!.type == ProfileType.business
+                        ? 'Delete Store'
+                        : 'Delete Profile',
+                    style: const TextStyle(
+                      color: AppColors.creditRed,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: AppColors.creditRed),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

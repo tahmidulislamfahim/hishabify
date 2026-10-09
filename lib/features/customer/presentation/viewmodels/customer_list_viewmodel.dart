@@ -42,6 +42,11 @@ class CustomerListViewModel extends StateNotifier<CustomerListState> {
 
   CustomerListViewModel(this._repo, this._ref) : super(CustomerListState()) {
     loadCustomers();
+    _ref.listen<ProfileState>(profileViewModelProvider, (previous, next) {
+      if (previous?.activeProfile?.id != next.activeProfile?.id) {
+        loadCustomers();
+      }
+    });
   }
 
   Future<void> loadCustomers() async {

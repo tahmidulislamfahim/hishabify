@@ -1,10 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../core/database/app_database.dart';
+
+enum RestoreStatus {
+  success,
+  cancelled,
+  invalidFile,
+  error,
+}
 
 class BackupRestoreService {
   static Future<File?> exportLocalBackup() async {
@@ -30,26 +38,36 @@ class BackupRestoreService {
     return file;
   }
 
-  static Future<bool> restoreLocalBackup() async {
+  static Future<RestoreStatus> restoreLocalBackup() async {
     final result = await FilePicker.pickFiles(
       type: FileType.any,
     );
 
     if (result.isEmpty || result.first.path == null) {
-      return false;
+      return RestoreStatus.cancelled;
     }
 
-    final file = File(result.first.path!);
-    final content = await file.readAsString();
-
     try {
-      final decoded = jsonDecode(content) as Map<String, dynamic>;
-      if (decoded['app'] != 'Hishabify' && decoded['app'] != 'CreditLog' && !decoded.containsKey('customers')) {
-        return false;
+      final file = File(result.first.path!);
+      final content = await file.readAsString();
+      final decoded = jsonDecode(content);
+
+      if (decoded is! Map<String, dynamic>) {
+        return RestoreStatus.invalidFile;
       }
-      return await AppDatabase.instance.restoreFromBackupJson(decoded);
-    } catch (_) {
-      return false;
+
+      if (decoded['app'] != 'Hishabify' &&
+          decoded['app'] != 'CreditLog' &&
+          !decoded.containsKey('customers') &&
+          !decoded.containsKey('profiles')) {
+        return RestoreStatus.invalidFile;
+      }
+
+      final success = await AppDatabase.instance.restoreFromBackupJson(decoded);
+      return success ? RestoreStatus.success : RestoreStatus.error;
+    } catch (e, stack) {
+      debugPrint('Restore error in BackupRestoreService: $e\n$stack');
+      return RestoreStatus.invalidFile;
     }
   }
 }

@@ -1,4 +1,3 @@
-import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/database/app_database.dart';
 import '../../transaction/domain/transaction_model.dart';
@@ -157,25 +156,30 @@ class CustomerRepository {
   Future<void> saveCustomer(Customer customer, {bool isNew = true}) async {
     final db = await _db.database;
     await db.transaction((txn) async {
-      await txn.insert(
-        'customers',
-        customer.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      if (isNew) {
+        await txn.insert('customers', customer.toMap());
 
-      // If new customer with carry forward balance > 0, insert initial transaction
-      if (isNew && customer.carryForwardBalance > 0) {
-        final tx = TransactionItem(
-          id: _uuid.v4(),
-          profileId: customer.profileId,
-          customerId: customer.id,
-          amount: customer.carryForwardBalance,
-          type: customer.carryForwardType,
-          dateTime: customer.createdAt,
-          note: 'Carry Forward Balance',
-          isCarryForward: true,
+        // If new customer with carry forward balance > 0, insert initial transaction
+        if (customer.carryForwardBalance > 0) {
+          final tx = TransactionItem(
+            id: _uuid.v4(),
+            profileId: customer.profileId,
+            customerId: customer.id,
+            amount: customer.carryForwardBalance,
+            type: customer.carryForwardType,
+            dateTime: customer.createdAt,
+            note: 'Carry Forward Balance',
+            isCarryForward: true,
+          );
+          await txn.insert('transactions', tx.toMap());
+        }
+      } else {
+        await txn.update(
+          'customers',
+          customer.toMap(),
+          where: 'id = ?',
+          whereArgs: [customer.id],
         );
-        await txn.insert('transactions', tx.toMap());
       }
     });
   }

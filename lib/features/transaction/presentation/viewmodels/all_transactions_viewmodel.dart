@@ -44,6 +44,11 @@ class AllTransactionsViewModel extends StateNotifier<AllTransactionsState> {
 
   AllTransactionsViewModel(this._txRepo, this._ref) : super(AllTransactionsState()) {
     loadTransactions();
+    _ref.listen<ProfileState>(profileViewModelProvider, (previous, next) {
+      if (previous?.activeProfile?.id != next.activeProfile?.id) {
+        loadTransactions();
+      }
+    });
   }
 
   Future<void> loadTransactions() async {

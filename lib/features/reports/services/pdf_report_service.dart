@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/utils/formatters.dart';
 import '../../customer/domain/customer_model.dart';
@@ -19,7 +20,27 @@ class PdfReportService {
     required bool includeNotes,
     required String dateFormat,
   }) async {
-    final pdf = pw.Document();
+    // Attempt to load Unicode-capable fonts (e.g. Noto Sans with Bengali fallback).
+    // If offline or timeout occurs, gracefully falls back to default PDF theme.
+    pw.ThemeData? theme;
+    try {
+      final baseFont = await PdfGoogleFonts.notoSansRegular().timeout(const Duration(milliseconds: 1500));
+      final boldFont = await PdfGoogleFonts.notoSansBold().timeout(const Duration(milliseconds: 1500));
+      final fallbacks = <pw.Font>[];
+      try {
+        final bengaliFont = await PdfGoogleFonts.notoSansBengaliRegular().timeout(const Duration(milliseconds: 1500));
+        fallbacks.add(bengaliFont);
+      } catch (_) {}
+      theme = pw.ThemeData.withFont(
+        base: baseFont,
+        bold: boldFont,
+        fontFallback: fallbacks,
+      );
+    } catch (_) {
+      // Offline fallback: standard PDF font
+    }
+
+    final pdf = pw.Document(theme: theme);
 
     double totalPayment = 0.0;
     double totalCredit = 0.0;
@@ -34,6 +55,15 @@ class PdfReportService {
     final isDue = netBalance > 0;
     final statusText = isDue ? '(due)' : (netBalance < 0 ? '(advance)' : '(settled)');
     final todayFormatted = DateFormat(dateFormat).format(DateTime.now());
+
+    final safeProfileName = AppFormatters.sanitizeForPdf(profile.name, fallback: 'MyStore');
+    final safeCustomerName = AppFormatters.sanitizeForPdf(customer.name, fallback: '-');
+    final safeCustomerPhone = customer.phone != null && customer.phone!.isNotEmpty
+        ? AppFormatters.sanitizeForPdf(customer.phone)
+        : null;
+    final safeCustomerAddress = customer.address != null && customer.address!.isNotEmpty
+        ? AppFormatters.sanitizeForPdf(customer.address)
+        : null;
 
     // Color definitions
     const tealColor = PdfColor.fromInt(0xFF0097A7);
@@ -61,7 +91,7 @@ class PdfReportService {
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text(
-                        profile.name,
+                        safeProfileName,
                         style: pw.TextStyle(
                           fontSize: 22,
                           fontWeight: pw.FontWeight.bold,
@@ -101,24 +131,24 @@ class PdfReportService {
                   pw.Row(
                     children: [
                       pw.Text('Name : ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 13)),
-                      pw.Text(customer.name, style: const pw.TextStyle(fontSize: 13)),
+                      pw.Text(safeCustomerName, style: const pw.TextStyle(fontSize: 13)),
                     ],
                   ),
-                  if (customer.phone != null && customer.phone!.isNotEmpty) ...[
+                  if (safeCustomerPhone != null && safeCustomerPhone.isNotEmpty) ...[
                     pw.SizedBox(height: 4),
                     pw.Row(
                       children: [
                         pw.Text('Phone : ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 13)),
-                        pw.Text(customer.phone!, style: const pw.TextStyle(fontSize: 13)),
+                        pw.Text(safeCustomerPhone, style: const pw.TextStyle(fontSize: 13)),
                       ],
                     ),
                   ],
-                  if (customer.address != null && customer.address!.isNotEmpty) ...[
+                  if (safeCustomerAddress != null && safeCustomerAddress.isNotEmpty) ...[
                     pw.SizedBox(height: 4),
                     pw.Row(
                       children: [
                         pw.Text('Address : ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 13)),
-                        pw.Text(customer.address!, style: const pw.TextStyle(fontSize: 13)),
+                        pw.Text(safeCustomerAddress, style: const pw.TextStyle(fontSize: 13)),
                       ],
                     ),
                   ],
@@ -130,7 +160,7 @@ class PdfReportService {
                         style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 13),
                       ),
                       pw.Text(
-                        '${AppFormatters.formatCurrency(netBalance, currency: profile.currency)} $statusText',
+                        '${AppFormatters.formatPdfCurrency(netBalance, currency: profile.currency)} $statusText',
                         style: pw.TextStyle(
                           fontWeight: pw.FontWeight.bold,
                           fontSize: 14,
@@ -205,7 +235,7 @@ class PdfReportService {
                         padding: const pw.EdgeInsets.all(8),
                         child: pw.Text(
                           transactions[i].type == TransactionType.payment
-                              ? AppFormatters.formatCurrency(transactions[i].amount, currency: profile.currency)
+                              ? AppFormatters.formatPdfCurrency(transactions[i].amount, currency: profile.currency)
                               : '-',
                           textAlign: pw.TextAlign.center,
                           style: pw.TextStyle(
@@ -219,7 +249,7 @@ class PdfReportService {
                         padding: const pw.EdgeInsets.all(8),
                         child: pw.Text(
                           transactions[i].type == TransactionType.credit
-                              ? AppFormatters.formatCurrency(transactions[i].amount, currency: profile.currency)
+                              ? AppFormatters.formatPdfCurrency(transactions[i].amount, currency: profile.currency)
                               : '-',
                           textAlign: pw.TextAlign.center,
                           style: pw.TextStyle(
@@ -232,7 +262,10 @@ class PdfReportService {
                       if (includeNotes)
                         pw.Padding(
                           padding: const pw.EdgeInsets.all(8),
-                          child: pw.Text(transactions[i].note ?? '-', style: const pw.TextStyle(fontSize: 9)),
+                          child: pw.Text(
+                            AppFormatters.sanitizeForPdf(transactions[i].note, fallback: '-'),
+                            style: const pw.TextStyle(fontSize: 9),
+                          ),
                         ),
                     ],
                   ),
@@ -249,7 +282,7 @@ class PdfReportService {
                     pw.Padding(
                       padding: const pw.EdgeInsets.all(8),
                       child: pw.Text(
-                        AppFormatters.formatCurrency(totalPayment, currency: profile.currency),
+                        AppFormatters.formatPdfCurrency(totalPayment, currency: profile.currency),
                         textAlign: pw.TextAlign.center,
                         style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11, color: greenColor),
                       ),
@@ -257,7 +290,7 @@ class PdfReportService {
                     pw.Padding(
                       padding: const pw.EdgeInsets.all(8),
                       child: pw.Text(
-                        AppFormatters.formatCurrency(totalCredit, currency: profile.currency),
+                        AppFormatters.formatPdfCurrency(totalCredit, currency: profile.currency),
                         textAlign: pw.TextAlign.center,
                         style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11, color: redColor),
                       ),
@@ -285,7 +318,7 @@ class PdfReportService {
                     style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12),
                   ),
                   pw.Text(
-                    '${AppFormatters.formatCurrency(netBalance, currency: profile.currency)} $statusText',
+                    '${AppFormatters.formatPdfCurrency(netBalance, currency: profile.currency)} $statusText',
                     style: pw.TextStyle(
                       fontWeight: pw.FontWeight.bold,
                       fontSize: 13,
@@ -309,13 +342,15 @@ class PdfReportService {
 
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final fileName = 'List_$timestamp.pdf';
-    final file = File(p.join(reportsDir.path, fileName));
+    final filePath = p.join(reportsDir.path, fileName);
+    final file = File(filePath);
+
     final bytes = await pdf.save();
     await file.writeAsBytes(bytes);
 
     return ReportFileItem(
       id: const Uuid().v4(),
-      filePath: file.path,
+      filePath: filePath,
       fileName: fileName,
       fileType: 'pdf',
       fileSize: bytes.length,

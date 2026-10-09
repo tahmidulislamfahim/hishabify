@@ -12,7 +12,7 @@ class SettingsState {
 
   SettingsState({
     this.settings = const AppSettings(),
-    this.isLoading = false,
+    this.isLoading = true,
   });
 
   SettingsState copyWith({
@@ -34,7 +34,7 @@ class SettingsViewModel extends StateNotifier<SettingsState> {
   final SettingsRepository _repo;
   final Ref _ref;
 
-  SettingsViewModel(this._repo, this._ref) : super(SettingsState()) {
+  SettingsViewModel(this._repo, this._ref) : super(SettingsState(isLoading: true)) {
     loadSettings();
     _ref.listen<ProfileState>(profileViewModelProvider, (previous, next) {
       final newCurrency = next.activeProfile?.currency;
@@ -46,13 +46,17 @@ class SettingsViewModel extends StateNotifier<SettingsState> {
 
   Future<void> loadSettings() async {
     state = state.copyWith(isLoading: true);
-    var settings = await _repo.getSettings();
-    final activeProfile = await _ref.read(profileRepositoryProvider).getActiveProfile();
-    if (activeProfile != null && settings.defaultCurrency != activeProfile.currency) {
-      settings = settings.copyWith(defaultCurrency: activeProfile.currency);
-      await _repo.saveSettings(settings);
+    try {
+      var settings = await _repo.getSettings();
+      final activeProfile = await _ref.read(profileRepositoryProvider).getActiveProfile();
+      if (activeProfile != null && settings.defaultCurrency != activeProfile.currency) {
+        settings = settings.copyWith(defaultCurrency: activeProfile.currency);
+        await _repo.saveSettings(settings);
+      }
+      state = state.copyWith(settings: settings, isLoading: false);
+    } catch (_) {
+      state = state.copyWith(isLoading: false);
     }
-    state = state.copyWith(settings: settings, isLoading: false);
   }
 
   Future<void> setAppLock(bool enabled) async {

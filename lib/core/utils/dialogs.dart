@@ -30,7 +30,7 @@ class AppDialogs {
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                color: AppColors.primary,
+                color: isDestructive ? AppColors.creditRed : AppColors.primary,
                 child: Center(
                   child: Text(
                     title,
