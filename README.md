@@ -15,17 +15,6 @@
 
 ---
 
-## 📱 Screenshots
-
-<p align="center">
-  <img src="screen_first_launch.png" width="23%" alt="Onboarding & Welcome" />
-  <img src="screen_1.png" width="23%" alt="Profile Details" />
-  <img src="screen_2.png" width="23%" alt="Customer Ledger" />
-  <img src="screen_3.png" width="23%" alt="Settings & Security" />
-</p>
-
----
-
 ## ✨ Key Features
 
 - **📒 Customer Ledger & Khata**:
